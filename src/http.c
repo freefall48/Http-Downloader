@@ -13,51 +13,50 @@
 
 int resolve_hostname(struct sockaddr_in *out, const char *host)
 {
-    struct addrinfo hints, *resolved = NULL;
+    struct addrinfo hints, *addr;
 
     // Zero out then populate the hints for getaddrinfo().
-    bzero(&hints, sizeof(hints));
+    memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
 
     // Attempt to resolve the hostname to an IPv4 address.
-    if (getaddrinfo(host, NULL, &hints, &resolved) != 0)
+    if (getaddrinfo(host, NULL, &hints, &addr) != 0)
     {
         perror("getaddrinfo");
         return -1;
     }
 
     // Copy the first result returned
-    memcpy(out, resolved->ai_addr, resolved->ai_addrlen);
-    freeaddrinfo(resolved);
+    memcpy(out, addr->ai_addr, addr->ai_addrlen);
+    freeaddrinfo(addr);
     return 0;
 }
 
-int read_response(Buffer **dst, int *sockfd)
+int read_response(Buffer **dst,  int *sockfd)
 {
-    int bytes_read;
-    char received[BUF_SIZE];
+    size_t bytes_read, length = BUF_SIZE;
+    char received[BUF_SIZE], *tmp;
 
-    while (1)
-    {
-        // Read at most one less byte than the maximum buffer size,
-        // then check there was not an error.
-        // Break the loop if an EOF was read.
-        bytes_read = read(*sockfd, received, BUF_SIZE - 1);
-        if (bytes_read < 0)
-        {
-            perror("read");
-            return -1;
+    (*dst) = malloc(sizeof(Buffer));
+    (*dst)->data = malloc(BUF_SIZE);
+    (*dst)->length = 0;
+
+    while (bytes_read = read(*sockfd, received, BUF_SIZE), bytes_read > 0)
+    {   
+        if ((*dst)->length + bytes_read > length) {
+            length *= 2;
+            tmp = realloc((*dst)->data, length);
+
+            if (tmp) {
+                (*dst)->data = tmp;
+            } else {
+                printf("realloc() did not return a pointer! Likely out of memory.\n");
+                free((*dst)->data);
+                free(*dst);
+                return -1;
+            }
         }
-        else if (bytes_read == 0)
-        {
-            break;
-        }
-
-        received[BUF_SIZE - 1] = '\0';
-
-        // Realloc the Buffers data then append the new data.
-        (*dst)->data = realloc((*dst)->data, bytes_read);
         memcpy((*dst)->data + (*dst)->length, received, bytes_read);
         (*dst)->length += bytes_read;
     }
@@ -80,7 +79,7 @@ int read_response(Buffer **dst, int *sockfd)
  */
 Buffer *http_query(char *host, char *page, const char *range, int port)
 {
-    Buffer *out;
+    Buffer *data;
     char req[BUF_SIZE];
     int sockfd;
 
@@ -88,14 +87,11 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
 
     // printf("%d\n", max_chunk_size);
 
-    // Allocate the response buffer and an inital data buffer.
-    out = (Buffer *)malloc(sizeof(Buffer));
-
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
     // Create the required HTTP/1.0 GET Request packet.
     snprintf(req, BUF_SIZE,
-             "GET %s HTTP/1.0\r\n"
+             "GET /%s HTTP/1.0\r\n"
              "Host: %s\r\n"
              "Range: bytes=%s\r\n"
              "User-Agent: getter\r\n\r\n",
@@ -120,13 +116,13 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
 
     write(sockfd, req, sizeof(req));
 
-    if (read_response(&out, &sockfd) != 0)
+    if (read_response(&data, &sockfd) != 0)
     {
         perror("read_response");
         return NULL;
     }
 
-    return out;
+    return data;
 }
 
 /**
@@ -154,6 +150,7 @@ char *http_get_content(Buffer *response)
 
 int split_url(const char *url, char **host, char **page)
 {
+    *host = malloc(sizeof(char) * BUF_SIZE);
     strncpy(*host, url, BUF_SIZE);
 
     *page = strstr(*host, "/");
@@ -167,29 +164,48 @@ int split_url(const char *url, char **host, char **page)
     }
     else
     {
-
         fprintf(stderr, "could not split url into host/page %s\n", url);
         return -1;
     }
 }
 
-/**
- * Splits an HTTP url into host, page. On success, calls http_query
- * to execute the query against the url. 
- * @param url - Webpage url e.g. learn.canterbury.ac.nz/profile
- * @param range - The desired byte range of data to retrieve from the page
- * @return Buffer pointer holding raw string data or NULL on failure
- */
-Buffer *http_url(const char *url, const char *range)
+int server_accepts_ranges(const char *response)
 {
-    char host[BUF_SIZE];
-    char *page;
-    
-    if (split_url(url, (char **)&host, &page) != 0) {
-        return NULL;
-    };
+    char *start, *end, range[10];
 
-    return http_query(host, page, range, 80);
+    // Determine if the server respects ranges.
+    start = strstr(response, "Accept-Ranges:");
+    if (start)
+    {
+        // The server mentions Accept-Ranges. However,
+        // may still explicitly disallow them.
+        // Find the start and end of the server response
+        // reguarding ranges.
+        start = strchr(start, ' ');
+        end = strchr(start, '\n');
+
+        strncpy(range, start, end - start);
+
+        if (strncmp("bytes", range, 10))
+        {
+            // The server respects byte ranges
+            return 1;
+        }
+    }
+    // The server either implicitly or explicitly
+    // does not allow ranges.
+    return 0;
+}
+
+int remote_content_length(Buffer *response)
+{
+    char *prefix;
+    int content_length;
+
+    prefix = strstr(response->data, "Content-Length:");
+    sscanf(prefix, "Content-Length: %d\r\n", &content_length);
+
+    return content_length;
 }
 
 /**
@@ -202,54 +218,89 @@ Buffer *http_url(const char *url, const char *range)
  */
 int get_num_tasks(char *url, int threads)
 {
-    // Buffer *res = (Buffer *) malloc(sizeof(Buffer));
-    char req[BUF_SIZE];
-    // int sockfd;
+    Buffer *response;
+    char *host, *page, request[BUF_SIZE];
+    struct sockaddr_in addr;
+    int sockfd, total_bytes, downloads;
 
-    // struct sockaddr_in addr;
+    split_url(url, &host, &page);
 
-    // sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
-    char host_raw[BUF_SIZE];
-    char *page, *host;
-    split_url(url, (char **)&host_raw, &page);
-    host = host_raw;
-    
-    snprintf(req, BUF_SIZE,
-             "HEAD %s HTTP/1.0\r\n"
+    snprintf(request, BUF_SIZE,
+             "HEAD /%s HTTP/1.0\r\n"
              "Host: %s\r\n"
              "User-Agent: getter\r\n\r\n",
              page, host);
 
-    printf("%s\n", req);
-
     // // Resolve the hostname to an IPv4 address
-    // if (resolve_hostname(&addr, host) != 0)
-    // {
-    //     perror("resolve_hostname");
-    //     return NULL;
-    // }
+    if (resolve_hostname(&addr, host) != 0)
+    {
+        perror("resolve_hostname");
+        return -1;
+    }
 
-    // addr.sin_port = htons(80);
+    addr.sin_port = htons(80);
 
     // // Attempt to connect to the server. If the connection
     // // is successful, send the HTTP GET request.
-    // if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
-    // {
-    //     perror("connect");
-    //     return NULL;
-    // }
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+    {
+        perror("connect");
+        return -1;
+    }
 
-    // write(sockfd, req, sizeof(req));
+    write(sockfd, request, sizeof(request));
 
-    // if (read_response(&res, &sockfd) != 0)
-    // {
-    //     perror("read_response");
-    //     return NULL;
-    // }
+    if (read_response(&response, &sockfd) != 0)
+    {
+        perror("read_response");
+        return -1;
+    }
 
-    // printf("%s\n", res->data);
-    return 4;
+    total_bytes = remote_content_length(response);
+
+    if (server_accepts_ranges(response->data))
+    {
+        // The server indicated it respects ranges so partial downloads
+        // can occur.
+        // Add 1 to prevent missing a small number of bytes due to rounding.
+        max_chunk_size = (total_bytes / threads) + 1;
+        downloads = threads;
+        // printf("%d %d %d %d\n", downloads, total_bytes, max_chunk_size, max_chunk_size * downloads);
+    }
+    else
+    {
+        // The server does not accept byte ranges. Therefore
+        // only a single download may occur.
+        max_chunk_size = total_bytes;
+        downloads = 1;
+    }
+
+    free(host);
+    free(response->data);
+    free(response);
+
+    return downloads;
+}
+
+/**
+ * Splits an HTTP url into host, page. On success, calls http_query
+ * to execute the query against the url. 
+ * @param url - Webpage url e.g. learn.canterbury.ac.nz/profile
+ * @param range - The desired byte range of data to retrieve from the page
+ * @return Buffer pointer holding raw string data or NULL on failure
+ */
+Buffer *http_url(const char *url, const char *range)
+{
+    char *host, *page;
+
+    split_url(url, &host, &page);
+
+    Buffer *data = http_query(host, page, range, 80);
+
+    free(host);
+
+    return data;
 }
 
 int get_max_chunk_size()
