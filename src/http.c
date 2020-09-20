@@ -39,7 +39,9 @@ int read_response(Buffer **dst,  int *sockfd)
     char received[BUF_SIZE], *tmp;
 
     (*dst) = malloc(sizeof(Buffer));
-    (*dst)->data = malloc(BUF_SIZE);
+
+    (*dst)->data = calloc(BUF_SIZE, 1);
+
     (*dst)->length = 0;
 
     while (bytes_read = read(*sockfd, received, BUF_SIZE), bytes_read > 0)
@@ -80,7 +82,7 @@ int read_response(Buffer **dst,  int *sockfd)
 Buffer *http_query(char *host, char *page, const char *range, int port)
 {
     Buffer *data;
-    char req[BUF_SIZE];
+    char request[BUF_SIZE];
     int sockfd;
 
     struct sockaddr_in addr;
@@ -90,7 +92,8 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
     // Create the required HTTP/1.0 GET Request packet.
-    snprintf(req, BUF_SIZE,
+    memset(request, '\0', BUF_SIZE);
+    snprintf(request, BUF_SIZE,
              "GET /%s HTTP/1.0\r\n"
              "Host: %s\r\n"
              "Range: bytes=%s\r\n"
@@ -114,7 +117,7 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
         return NULL;
     }
 
-    write(sockfd, req, sizeof(req));
+    write(sockfd, request, sizeof(request));
 
     if (read_response(&data, &sockfd) != 0)
     {
@@ -225,6 +228,9 @@ int get_num_tasks(char *url, int threads)
 
     split_url(url, &host, &page);
 
+    // Zero out the request array then write create the HTTP HEAD message
+    // to send to the server.
+    memset(request, '\0', BUF_SIZE);
     snprintf(request, BUF_SIZE,
              "HEAD /%s HTTP/1.0\r\n"
              "Host: %s\r\n"
@@ -266,7 +272,6 @@ int get_num_tasks(char *url, int threads)
         // Add 1 to prevent missing a small number of bytes due to rounding.
         max_chunk_size = (total_bytes / threads) + 1;
         downloads = threads;
-        // printf("%d %d %d %d\n", downloads, total_bytes, max_chunk_size, max_chunk_size * downloads);
     }
     else
     {

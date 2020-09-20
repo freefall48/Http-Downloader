@@ -90,7 +90,7 @@ void *worker_thread(void *arg) {
     }
     
     free(range);
-    return NULL;
+    pthread_exit(NULL);
 }
 
 
@@ -176,8 +176,8 @@ int open_file_output_fd(const char *url, const char* output_dir) {
     }
 
     // // Open a file descriptor to the desired file.
-    if ((fd = open(file_path, O_WRONLY | O_CREAT)) < 0) {
-            perror("open output file");
+    if ((fd = open(file_path, O_CREAT|O_WRONLY|O_TRUNC, S_IRUSR|S_IWUSR)) < 0) {
+            perror("creat output file");
             exit(EXIT_FAILURE);
         }
 
