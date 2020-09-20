@@ -21,14 +21,16 @@
  * but it is hidden from the outside.
  */
 typedef struct QueueStruct {
-    pthread_mutex_t lock;
-    sem_t readable;
-    sem_t writable;
+    pthread_mutex_t write_lock;
+    pthread_mutex_t read_lock;
+    sem_t empty;
+    sem_t full;
+
+    int write_index;
+    int read_index;
+    int size;
 
     void **actions;
-
-    int next_pos;
-    int size;
 } Queue;
 
 
@@ -38,15 +40,18 @@ typedef struct QueueStruct {
  * @return queue - Pointer to the allocated queue
  */
 Queue *queue_alloc(int size) {
-    Queue *queue = (Queue *) malloc(sizeof(Queue));
-
+    Queue *queue = malloc(sizeof(Queue));
     queue->actions = malloc(sizeof(void *) * size);
-    queue->next_pos = 0;
-    queue->size = size;
 
-    pthread_mutex_init(&queue->lock, NULL);
-    sem_init(&queue->readable, 0, 0);
-    sem_init(&queue->writable, 0, size);
+    pthread_mutex_init(&queue->write_lock, NULL);
+    pthread_mutex_init(&queue->read_lock, NULL);
+
+    sem_init(&queue->empty, 0, 0);
+    sem_init(&queue->full, 0, size);
+
+    queue->write_index = 0;
+    queue->read_index = 0;
+    queue->size = size;
 
     return queue;
 }
@@ -79,16 +84,15 @@ void queue_free(Queue *queue) {
  *               it is correctly typed.
  */
 void queue_put(Queue *queue, void *item) {
-    // Check if there is a position to put the item.
-    sem_wait(&queue->writable);
-    pthread_mutex_lock(&queue->lock);
+    pthread_mutex_lock(&queue->write_lock);
+    sem_wait(&queue->full);
 
-    queue->actions[queue->next_pos] = item;
-    queue->next_pos++;
+    queue->actions[queue->write_index] = item;
+    queue->write_index = (queue->write_index + 1) % queue->size;
 
-    pthread_mutex_unlock(&queue->lock);
-    sem_post(&queue->readable);
-    }
+    sem_post(&queue->empty);
+    pthread_mutex_unlock(&queue->write_lock);
+}
 
 
 /**
@@ -105,15 +109,14 @@ void queue_put(Queue *queue, void *item) {
 void *queue_get(Queue *queue) {
     void *action;
 
-    sem_wait(&queue->readable);
-    pthread_mutex_lock(&queue->lock);
+    pthread_mutex_lock(&queue->read_lock);
+    sem_wait(&queue->empty);
 
-    action = queue->actions[queue->next_pos - 1];
-    queue->next_pos--;
-
-    pthread_mutex_unlock(&queue->lock);
-    sem_post(&queue->writable);
+    action = queue->actions[queue->read_index];
+    queue->read_index = (queue->read_index + 1) % queue->size;
     
+    sem_post(&queue->full);
+    pthread_mutex_unlock(&queue->read_lock);
 
     return action;
 }

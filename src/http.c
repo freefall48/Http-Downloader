@@ -153,10 +153,10 @@ char *http_get_content(Buffer *response)
 
 int split_url(const char *url, char **host, char **page)
 {
-    *host = malloc(sizeof(char) * BUF_SIZE);
+    *host = calloc(BUF_SIZE, 1);
     strncpy(*host, url, BUF_SIZE);
 
-    *page = strstr(*host, "/");
+    *page = strchr(*host, '/');
 
     if (*page)
     {
@@ -222,15 +222,17 @@ int remote_content_length(Buffer *response)
 int get_num_tasks(char *url, int threads)
 {
     Buffer *response;
-    char *host, *page, request[BUF_SIZE];
+    char *host, *page, request[BUF_SIZE] = {0};
     struct sockaddr_in addr;
     int sockfd, total_bytes, downloads;
 
-    split_url(url, &host, &page);
+    if (split_url(url, &host, &page) < 0) {
+        free(host);
+        return 0;
+    }
 
     // Zero out the request array then write create the HTTP HEAD message
     // to send to the server.
-    memset(request, '\0', BUF_SIZE);
     snprintf(request, BUF_SIZE,
              "HEAD /%s HTTP/1.0\r\n"
              "Host: %s\r\n"
@@ -243,6 +245,8 @@ int get_num_tasks(char *url, int threads)
         perror("resolve_hostname");
         return -1;
     }
+
+    free(host);
 
     addr.sin_port = htons(80);
 
@@ -264,13 +268,12 @@ int get_num_tasks(char *url, int threads)
     }
 
     total_bytes = remote_content_length(response);
-
-    if (server_accepts_ranges(response->data))
+    if (server_accepts_ranges(response->data) && threads > 1)
     {
         // The server indicated it respects ranges so partial downloads
         // can occur.
         // Add 1 to prevent missing a small number of bytes due to rounding.
-        max_chunk_size = (total_bytes / threads) + 1;
+        max_chunk_size = (total_bytes + (threads - 1)) / threads;
         downloads = threads;
     }
     else
@@ -281,7 +284,6 @@ int get_num_tasks(char *url, int threads)
         downloads = 1;
     }
 
-    free(host);
     free(response->data);
     free(response);
 
@@ -299,12 +301,14 @@ Buffer *http_url(const char *url, const char *range)
 {
     char *host, *page;
 
-    split_url(url, &host, &page);
+    if (split_url(url, &host, &page) < 0) {
+        free(host);
+        return NULL;
+    }
 
     Buffer *data = http_query(host, page, range, 80);
 
     free(host);
-
     return data;
 }
 

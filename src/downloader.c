@@ -60,10 +60,10 @@ void *worker_thread(void *arg) {
     Context *context = (Context *)arg;
 
     Task *task = (Task *)queue_get(context->todo);
-    char *range = (char *)malloc(1024 * sizeof(char));
+    char *range = (char *)malloc(1024);
     
     while (task) {
-        snprintf(range, 1024 * sizeof(char), "%d-%d", task->min_range, 
+        snprintf(range, 1024, "%d-%d", task->min_range, 
         task->max_range);
     
         task->result = http_url(task->url, range);
@@ -73,29 +73,29 @@ void *worker_thread(void *arg) {
             if (data) {
                 size_t length = task->result->length - (data - task->result->data);
                 printf("downloaded %d bytes from %s\n", (int)length, task->url);
-                pwrite(task->fd, data, length, task->min_range);
+                if ((pwrite(task->fd, data, length, task->min_range)) <= 0) {
+                    perror("pwrite");
+                    printf("HEREE\n");
+                };
             } else {
                 fprintf(stderr, "error downloading: %s\n", task->url);
-                exit(EXIT_FAILURE);
             }
         } else {
             fprintf(stderr, "error downloading: %s\n", task->url);
-            exit(EXIT_FAILURE);
         }
         
-
-        close(task->fd);
         free_task(task);
+
         task = (Task *)queue_get(context->todo);
     }
     
     free(range);
-    pthread_exit(NULL);
+    return NULL;
 }
 
 
 Context *spawn_workers(int num_workers) {
-    Context *context = (Context*)malloc(sizeof(Context));
+    Context *context = malloc(sizeof(Context));
 
     context->todo = queue_alloc(num_workers * 2);
 
@@ -130,7 +130,6 @@ void free_workers(Context *context) {
     }
 
     queue_free(context->todo);
-    // queue_free(context->done);
 
     free(context->threads);
     free(context);
@@ -151,13 +150,16 @@ Task *new_task(char *url, int min_range, int max_range, int fd) {
 }
 
 int open_file_output_fd(const char *url, const char* output_dir) {
-    char file_path[FILE_SIZE], cwd[FILE_SIZE], *current, *prev, *context;
+    char file_path[FILE_SIZE], *cwd, *current, *prev, *context;
     int fd;
 
     snprintf(file_path, FILE_SIZE, "%s/%s", output_dir, url);
 
     current = strtok_r(file_path, "/", &context);
-    getcwd(cwd, sizeof(cwd));
+    if ((cwd = getcwd(NULL, 0)) == NULL) {
+        perror("getcwd");
+        return -1;
+    }
 
     while (current != NULL) {
         prev = current;
@@ -170,97 +172,21 @@ int open_file_output_fd(const char *url, const char* output_dir) {
     }
 
     chdir(cwd);
+    free(cwd);
+
     if (snprintf(file_path, FILE_SIZE, "%s/%s", output_dir, url) < 0) {
         perror("snprintf file_path");
-        exit(EXIT_FAILURE);
+        return -1;
     }
 
     // // Open a file descriptor to the desired file.
     if ((fd = open(file_path, O_CREAT|O_WRONLY|O_TRUNC, S_IRUSR|S_IWUSR)) < 0) {
             perror("creat output file");
-            exit(EXIT_FAILURE);
+            return -1;
         }
 
     return fd;
 }
-
-
-// void wait_task(int fd, Context *context) {
-
-//     char filename[FILE_SIZE], url_file[FILE_SIZE];
-//     Task *task = (Task*)queue_get(context->done);
-
-//     if (task->result) {
-
-//         char *data = http_get_content(task->result);
-//         if (data) {
-//             size_t length = task->result->length - (data - task->result->data);            
-
-//             pwrite(fd, data, length, task->min_range);
-
-//             printf("downloaded %d bytes from %s\n", (int)length, task->url);
-//         }
-//         else {
-//             printf("error in response from %s\n", task->url);
-//         }
-
-//         // printf("%s | %d\n", dest, bytes);
-
-//         // snprintf(url_file, FILE_SIZE * sizeof(char), "%d", task->min_range);
-//         // size_t len = strlen(url_file);
-//         // for (int i = 0; i < len; ++i) {
-//         //     if (url_file[i] == '/') {
-//         //         url_file[i] = '|';
-//         //     }
-//         // }
-
-
-//         // if (snprintf(filename, FILE_SIZE * sizeof(char), "%s/%s", download_dir, url_file) < 0)  {
-//         //     fprintf(stderr, "error, snprintf could not complete.");
-//         // }
-//         // FILE *fp = fopen(filename, "w");
-
-
-//         // if (fp == NULL) {
-//         //     fprintf(stderr, "error writing to: %s\n", filename);
-//         //     exit(EXIT_FAILURE);
-//         // }
-
-       
-
-//     }
-//     else {
-
-//         fprintf(stderr, "error downloading: %s\n", task->url);
-
-//     }
-
-//     free_task(task);
-// }
-
-
-// /**
-//  * Merge all files in from src to file with name dest synchronously
-//  * by reading each file, and writing its contents to the dest file.
-//  * @param src - char pointer to src directory holding files to merge
-//  * @param dest - char pointer to name of file resulting from merge
-//  * @param bytes - The maximum byte size downloaded
-//  * @param tasks - The tasks needed for the multipart download
-//  */
-// void merge_files(char *src, char *dest, int bytes, int tasks) {
-//     assert(0 && "not implemented yet!");
-// }
-
-
-// /**
-//  * Remove files caused by chunk downloading
-//  * @param dir - The directory holding the chunked files
-//  * @param bytes - The maximum byte size per file. Assumed to be filename
-//  * @param files - The number of chunked files to remove.
-//  */
-// void remove_chunk_files(char *dir, int bytes, int files) {
-//    assert(0 && "not implemented yet!");
-// }
 
 
 int main(int argc, char **argv) {
@@ -284,9 +210,8 @@ int main(int argc, char **argv) {
     // spawn threads and create work queue(s)
     Context *context = spawn_workers(num_workers);
 
-    int work = 0, bytes = 0, num_tasks = 0;
     while ((len = getline(&line, &len, fp)) != -1) {
-
+        int bytes, num_tasks, fd;
 
         if (line[len - 1] == '\n') {
             line[len - 1] = '\0';
@@ -295,18 +220,13 @@ int main(int argc, char **argv) {
         num_tasks = get_num_tasks(line, num_workers);
         bytes = get_max_chunk_size();
 
-        int fd = open_file_output_fd(line, download_dir);
+        if ((fd = open_file_output_fd(line, download_dir)) <= 0) {
+            fprintf(stderr, "Failed to open output file for writing\n");
+            continue;
+        }
         
         for (int i  = 0; i < num_tasks; i ++) {
-            int nfd;
-            ++work;
-
-            if ((nfd = fcntl(fd, F_DUPFD, 0)) == -1) {
-                perror("fcntl");
-                exit(EXIT_FAILURE);
-            }
-
-            queue_put(context->todo, new_task(line, i * bytes, (i+1) * bytes, nfd));
+            queue_put(context->todo, new_task(line, i * bytes, (i+1) * bytes, fcntl(fd, F_DUPFD_CLOEXEC, 0)));
         }
 
         close(fd);
