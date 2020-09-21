@@ -63,19 +63,23 @@ void *worker_thread(void *arg) {
     char *range = (char *)malloc(1024);
     
     while (task) {
-        snprintf(range, 1024, "%d-%d", task->min_range, 
-        task->max_range);
-    
+        snprintf(range, 1024, "%d-%d", task->min_range, task->max_range);
         task->result = http_url(task->url, range);
 
         if (task->result) {
+            // Strip the header information from the Buffer.
             char *data = http_get_content(task->result);
             if (data) {
                 size_t length = task->result->length - (data - task->result->data);
                 printf("downloaded %d bytes from %s\n", (int)length, task->url);
+
+                // Write the Buffer to the provided file descriptor. pwrite() is thread-safe
+                // and can write to a file with an offset. This task has downloaded the bytes
+                // for its byte range, therefore, its byte range is unique. The minimum of the
+                // byte range is the offset to start writing at which will not confict with other
+                // concurrent write requests to the file.
                 if ((pwrite(task->fd, data, length, task->min_range)) <= 0) {
-                    perror("pwrite");
-                    printf("HEREE\n");
+                    fprintf(stderr, "error writing: %s\n", task->url);
                 };
             } else {
                 fprintf(stderr, "error downloading: %s\n", task->url);
@@ -83,9 +87,8 @@ void *worker_thread(void *arg) {
         } else {
             fprintf(stderr, "error downloading: %s\n", task->url);
         }
-        
-        free_task(task);
 
+        free_task(task);
         task = (Task *)queue_get(context->todo);
     }
     
@@ -153,27 +156,38 @@ int open_file_output_fd(const char *url, const char* output_dir) {
     char file_path[FILE_SIZE], *cwd, *current, *prev, *context;
     int fd;
 
+    // Prefix the download path with the user specified directory
     snprintf(file_path, FILE_SIZE, "%s/%s", output_dir, url);
 
-    current = strtok_r(file_path, "/", &context);
+    // Get the current working directory so it can be returned to
+    // after the directory tree is created.
     if ((cwd = getcwd(NULL, 0)) == NULL) {
         perror("getcwd");
         return -1;
     }
 
+    // While the file url still contains '/' characters, there must
+    // be more subdirectories.
+    current = strtok_r(file_path, "/", &context);
     while (current != NULL) {
         prev = current;
         current = strtok_r(NULL, "/", &context);
         if (current != NULL)
         {
+            // There is atleast another level directory level below this one
+            // so create this one and enter it.
             create_directory(prev);
             chdir(prev);
         } 
     }
 
+    // Reset back to the working directory the program was prevously 
+    // executing within.
     chdir(cwd);
     free(cwd);
 
+    // Reset the file_url back to the full path. strtok_r placed '\0' in the
+    // previous copy to aid in creating the directory tree.
     if (snprintf(file_path, FILE_SIZE, "%s/%s", output_dir, url) < 0) {
         perror("snprintf file_path");
         return -1;
@@ -210,6 +224,7 @@ int main(int argc, char **argv) {
     // spawn threads and create work queue(s)
     Context *context = spawn_workers(num_workers);
 
+    // Foreach url within the file that contains a list of urls to download.
     while ((len = getline(&line, &len, fp)) != -1) {
         int bytes, num_tasks, fd;
 
@@ -217,18 +232,33 @@ int main(int argc, char **argv) {
             line[len - 1] = '\0';
         }
 
-        num_tasks = get_num_tasks(line, num_workers);
+        // Determine the number of downloads required to completely retrieve the
+        // specified file. Validates the returned value.
+        if ((num_tasks = get_num_tasks(line, num_workers)) <= 1) {
+            // The number of required downloads could not be determined.
+            continue;
+        }
+        // As the above call must of returned a valid number of downloads, get
+        // the determined chunk size.
         bytes = get_max_chunk_size();
 
+        // Open a file descriptor for the given url where the downlaoded bytes can be
+        // written.
         if ((fd = open_file_output_fd(line, download_dir)) <= 0) {
+            // The file descriptor was never created/assigned.
             fprintf(stderr, "Failed to open output file for writing\n");
             continue;
         }
         
+        // For each download required for a given url, create a new task with the required 
+        // byte range. fcntl is used to duplicate the file descriptor so each task has
+        // its own unique reference to the file.
+        // F_DUPFD_CLOEXEC ensures once a task writes to the file descriptor it is automatically closed.
         for (int i  = 0; i < num_tasks; i ++) {
             queue_put(context->todo, new_task(line, i * bytes, (i+1) * bytes, fcntl(fd, F_DUPFD_CLOEXEC, 0)));
         }
 
+        // Cleanup
         close(fd);
     }
    

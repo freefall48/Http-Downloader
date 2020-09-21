@@ -5,3 +5,5 @@ http_test
 queue_test
 ENCE360 assignment 2020.pdf
 bin
+http_download
+*.txt

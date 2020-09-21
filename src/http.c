@@ -53,9 +53,7 @@ int read_response(Buffer **dst,  int *sockfd)
             if (tmp) {
                 (*dst)->data = tmp;
             } else {
-                printf("realloc() did not return a pointer! Likely out of memory.\n");
-                free((*dst)->data);
-                free(*dst);
+                fprintf(stderr, "realloc() did not return a pointer! Likely out of memory.\n");
                 return -1;
             }
         }
@@ -87,11 +85,10 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
 
     struct sockaddr_in addr;
 
-    // printf("%d\n", max_chunk_size);
-
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
-    // Create the required HTTP/1.0 GET Request packet.
+    // Zero out the array then create the 
+    // required HTTP/1.0 GET Request packet.
     memset(request, '\0', BUF_SIZE);
     snprintf(request, BUF_SIZE,
              "GET /%s HTTP/1.0\r\n"
@@ -109,8 +106,7 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
 
     addr.sin_port = htons(port);
 
-    // Attempt to connect to the server. If the connection
-    // is successful, send the HTTP GET request.
+    // Attempt to connect to the server.
     if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
     {
         perror("connect");
@@ -119,6 +115,7 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
 
     write(sockfd, request, sizeof(request));
 
+    // Read the response from the server into a Buffer.
     if (read_response(&data, &sockfd) != 0)
     {
         perror("read_response");
@@ -156,6 +153,7 @@ int split_url(const char *url, char **host, char **page)
     *host = calloc(BUF_SIZE, 1);
     strncpy(*host, url, BUF_SIZE);
 
+    // Find the '/' as this splits the host and page.
     *page = strchr(*host, '/');
 
     if (*page)
@@ -176,7 +174,8 @@ int server_accepts_ranges(const char *response)
 {
     char *start, *end, range[10];
 
-    // Determine if the server respects ranges.
+    // Determine if the server response contains the 
+    // required field.
     start = strstr(response, "Accept-Ranges:");
     if (start)
     {
@@ -205,6 +204,7 @@ int remote_content_length(Buffer *response)
     char *prefix;
     int content_length;
 
+    // Extract the content length from the server response.
     prefix = strstr(response->data, "Content-Length:");
     sscanf(prefix, "Content-Length: %d\r\n", &content_length);
 
@@ -226,13 +226,15 @@ int get_num_tasks(char *url, int threads)
     struct sockaddr_in addr;
     int sockfd, total_bytes, downloads;
 
+    // Try to split the url into 2 parts. Host and page.
     if (split_url(url, &host, &page) < 0) {
+        // The url did not conform to host/page, so could
+        // not be split.
         free(host);
-        return 0;
+        return -1;
     }
 
-    // Zero out the request array then write create the HTTP HEAD message
-    // to send to the server.
+    // Create the HTTP HEAD message to send to the server.
     snprintf(request, BUF_SIZE,
              "HEAD /%s HTTP/1.0\r\n"
              "Host: %s\r\n"
@@ -242,16 +244,15 @@ int get_num_tasks(char *url, int threads)
     // // Resolve the hostname to an IPv4 address
     if (resolve_hostname(&addr, host) != 0)
     {
+        // The hostname could not be resolved.
         perror("resolve_hostname");
         return -1;
     }
 
     free(host);
-
     addr.sin_port = htons(80);
 
-    // // Attempt to connect to the server. If the connection
-    // // is successful, send the HTTP GET request.
+    // // Attempt to connect to the server.
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
     {
@@ -261,8 +262,11 @@ int get_num_tasks(char *url, int threads)
 
     write(sockfd, request, sizeof(request));
 
+    // Read the server response into a Buffer.
     if (read_response(&response, &sockfd) != 0)
     {
+        // Server response couldn't be parsed into
+        // a Buffer.
         perror("read_response");
         return -1;
     }
@@ -272,7 +276,8 @@ int get_num_tasks(char *url, int threads)
     {
         // The server indicated it respects ranges so partial downloads
         // can occur.
-        // Add 1 to prevent missing a small number of bytes due to rounding.
+        // (dividend + (divisor - 1)) / divisor is a method to perform
+        // round up integer divison.
         max_chunk_size = (total_bytes + (threads - 1)) / threads;
         downloads = threads;
     }
