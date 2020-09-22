@@ -247,6 +247,7 @@ int main(int argc, char **argv) {
         // specified file. Validates the returned value.
         if ((num_tasks = get_num_tasks(line, num_workers)) < 1) {
             // The number of required downloads could not be determined.
+            fprintf(stderr, "could not determine the number of downloads for : %s\n", line);
             continue;
         }
         // As the above call must of returned a valid number of downloads, get

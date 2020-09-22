@@ -12,9 +12,6 @@
 #define BUF_SIZE 1024
 // The maximum chunk size is 40MB.
 #define CHUNKING_MAX_BYTES 41943040
-// (dividend + (divisor - 1)) / divisor is a method to perform
-// round up integer divison.
-#define INT_DIVISION_RUP(n, d) ((n + (d - 1)) / d)
 
 int resolve_hostname(struct sockaddr_in *out, const char *host)
 {
@@ -204,16 +201,55 @@ int server_accepts_ranges(const char *response)
     return 0;
 }
 
-int remote_content_length(Buffer *response)
+size_t remote_content_length(Buffer *response)
 {
     char *prefix;
     int content_length;
 
     // Extract the content length from the server response.
     prefix = strstr(response->data, "Content-Length:");
-    sscanf(prefix, "Content-Length: %d\r\n", &content_length);
+    if (prefix) {
+        sscanf(prefix, "Content-Length: %d\r\n", &content_length);
+    } else {
+        // The server did not provide a content length.
+        return 0;
+    }
 
     return content_length;
+}
+
+int calc_chunking(Buffer *response, int threads) {
+    size_t total_bytes;
+    
+    if ((total_bytes = remote_content_length(response)) == 0) {
+        // Invalid content length to download.
+        return 0;
+    }
+
+    if (server_accepts_ranges(response->data) && threads > 1)
+    {
+        int chunk_size, additional_downloads = 0;
+        // The server indicated it respects ranges so partial downloads
+        // can occur.
+        do {
+            // (dividend + (divisor - 1)) / divisor is a method to perform
+            // round up integer divison.
+            chunk_size = (total_bytes + (threads + additional_downloads - 1)) / threads + additional_downloads;
+            // Make sure the chunk size does not exceed the defined max.
+            if (chunk_size > CHUNKING_MAX_BYTES) {
+                // The current chunk size exceeds the maximum so there
+                // must be atleast 1 additional download required.
+                ++additional_downloads;
+            }
+        } while (chunk_size > CHUNKING_MAX_BYTES);
+
+        max_chunk_size = chunk_size;
+        return threads + additional_downloads;     
+    }
+    // The server does not accept byte ranges. Therefore
+    // only a single download may occur.
+    max_chunk_size = total_bytes;
+    return 1;
 }
 
 /**
@@ -226,11 +262,10 @@ int remote_content_length(Buffer *response)
  */
 int get_num_tasks(char *url, int threads)
 {
-    // TODO: This method is to long
     Buffer *response;
     char *host, *page, request[BUF_SIZE] = {0};
     struct sockaddr_in addr;
-    int sockfd, total_bytes, downloads;
+    int sockfd, downloads;
 
     // Try to split the url into 2 parts. Host and page.
     if (split_url(url, &host, &page) < 0) {
@@ -277,27 +312,7 @@ int get_num_tasks(char *url, int threads)
         return -1;
     }
 
-    total_bytes = remote_content_length(response);
-    if (server_accepts_ranges(response->data) && threads > 1)
-    {
-        int chunk_size, additional_downloads = 0;
-        // The server indicated it respects ranges so partial downloads
-        // can occur.
-        // Make sure the chunk size does not exceed the defined max.
-        do {
-            chunk_size = INT_DIVISION_RUP(total_bytes, threads + additional_downloads);
-        } while (++additional_downloads, chunk_size > CHUNKING_MAX_BYTES);
-
-        downloads = threads + additional_downloads;
-        max_chunk_size = chunk_size;
-    }
-    else
-    {
-        // The server does not accept byte ranges. Therefore
-        // only a single download may occur.
-        max_chunk_size = total_bytes;
-        downloads = 1;
-    }
+    downloads = calc_chunking(response, threads);
 
     free(response->data);
     free(response);
