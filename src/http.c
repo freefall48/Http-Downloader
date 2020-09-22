@@ -221,6 +221,7 @@ int remote_content_length(Buffer *response)
  */
 int get_num_tasks(char *url, int threads)
 {
+    // TODO: This method is to long
     Buffer *response;
     char *host, *page, request[BUF_SIZE] = {0};
     struct sockaddr_in addr;
@@ -278,6 +279,8 @@ int get_num_tasks(char *url, int threads)
         // can occur.
         // (dividend + (divisor - 1)) / divisor is a method to perform
         // round up integer divison.
+
+        // TODO: set a cap on the chunk size
         max_chunk_size = (total_bytes + (threads - 1)) / threads;
         downloads = threads;
     }
