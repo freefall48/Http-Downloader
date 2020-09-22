@@ -20,7 +20,7 @@ typedef struct {
     int max_range;
     Buffer *result;
     int fd;
-    int id;
+    char *id;
 }  Task;
 
 
@@ -52,6 +52,7 @@ void free_task(Task *task) {
         free(task->result);
     }
 
+    free(task->id);
     free(task->url);
     free(task);
 }
@@ -72,7 +73,7 @@ void *worker_thread(void *arg) {
             char *data = http_get_content(task->result);
             if (data) {
                 size_t length = task->result->length - (data - task->result->data);
-                printf("[%4d] downloaded %d bytes from %s\n", task->id, (int)length, task->url);
+                printf("[%s] downloaded %zu bytes from %s\n", task->id, length, task->url);
 
                 // Write the Buffer to the provided file descriptor. pwrite() is thread-safe
                 // and can write to a file with an offset. This task has downloaded the bytes
@@ -140,16 +141,19 @@ void free_workers(Context *context) {
 }
 
 
-Task *new_task(char *url, int min_range, int max_range, int fd, int id) {
+Task *new_task(char *url, int min_range, int max_range, int fd, char *id) {
     Task *task = malloc(sizeof(Task));
     task->result = NULL;
+
     task->url = malloc(strlen(url) + 1);
+    strcpy(task->url, url);
+
+    task->id = malloc(strlen(id) + 1);
+    strcpy(task->id, id);
+
     task->min_range = min_range;
     task->max_range = max_range;
     task->fd = fd;
-    task->id = id;
-
-    strcpy(task->url, url);
 
     return task;
 }
@@ -258,9 +262,11 @@ int main(int argc, char **argv) {
         // its own unique reference to the file.
         // F_DUPFD_CLOEXEC ensures once a task writes to the file descriptor it is automatically closed.
         for (int i  = 0; i < num_tasks; i ++) {
-            queue_put(context->todo, new_task(line, i * bytes, (i+1) * bytes, fcntl(fd, F_DUPFD_CLOEXEC, 0), i + x ));
+            char id[8];
+            snprintf(id, 8, "%03d-%03d", x, i);
+            queue_put(context->todo, new_task(line, i * bytes, (i+1) * bytes, fcntl(fd, F_DUPFD_CLOEXEC, 0), id));
         }
-        x += 100;
+        x++;
 
         // Cleanup
         close(fd);
