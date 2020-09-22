@@ -94,7 +94,6 @@ void queue_put(Queue *queue, void *item) {
     pthread_mutex_unlock(&queue->write_lock);
 }
 
-
 /**
  * Get an item from the concurrent queue
  * 

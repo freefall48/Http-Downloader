@@ -20,6 +20,7 @@ typedef struct {
     int max_range;
     Buffer *result;
     int fd;
+    int id;
 }  Task;
 
 
@@ -71,7 +72,7 @@ void *worker_thread(void *arg) {
             char *data = http_get_content(task->result);
             if (data) {
                 size_t length = task->result->length - (data - task->result->data);
-                printf("downloaded %d bytes from %s\n", (int)length, task->url);
+                printf("[%4d] downloaded %d bytes from %s\n", task->id, (int)length, task->url);
 
                 // Write the Buffer to the provided file descriptor. pwrite() is thread-safe
                 // and can write to a file with an offset. This task has downloaded the bytes
@@ -139,13 +140,14 @@ void free_workers(Context *context) {
 }
 
 
-Task *new_task(char *url, int min_range, int max_range, int fd) {
+Task *new_task(char *url, int min_range, int max_range, int fd, int id) {
     Task *task = malloc(sizeof(Task));
     task->result = NULL;
     task->url = malloc(strlen(url) + 1);
     task->min_range = min_range;
     task->max_range = max_range;
     task->fd = fd;
+    task->id = id;
 
     strcpy(task->url, url);
 
@@ -225,6 +227,7 @@ int main(int argc, char **argv) {
     Context *context = spawn_workers(num_workers);
 
     // Foreach url within the file that contains a list of urls to download.
+    int x = 0;
     while ((len = getline(&line, &len, fp)) != -1) {
         int bytes, num_tasks, fd;
 
@@ -255,8 +258,9 @@ int main(int argc, char **argv) {
         // its own unique reference to the file.
         // F_DUPFD_CLOEXEC ensures once a task writes to the file descriptor it is automatically closed.
         for (int i  = 0; i < num_tasks; i ++) {
-            queue_put(context->todo, new_task(line, i * bytes, (i+1) * bytes, fcntl(fd, F_DUPFD_CLOEXEC, 0)));
+            queue_put(context->todo, new_task(line, i * bytes, (i+1) * bytes, fcntl(fd, F_DUPFD_CLOEXEC, 0), i + x ));
         }
+        x += 100;
 
         // Cleanup
         close(fd);
