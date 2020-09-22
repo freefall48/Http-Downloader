@@ -21,11 +21,14 @@ typedef struct {
     Buffer *result;
     int fd;
     int id;
+    int flags;
 }  Task;
 
 
 typedef struct {
     Queue *todo;
+    // TODO: implement the retry queue.
+    Queue *retry;
 
     pthread_t *threads;
     int num_workers;
@@ -66,22 +69,26 @@ void *worker_thread(void *arg) {
     while (task) {
         snprintf(range, 1024, "%d-%d", task->min_range, task->max_range);
         task->result = http_url(task->url, range);
-
         if (task->result) {
             // Strip the header information from the Buffer.
             char *data = http_get_content(task->result);
             if (data) {
                 size_t length = task->result->length - (data - task->result->data);
-                printf("[%4d] downloaded %d bytes from %s\n", task->id, (int)length, task->url);
+                printf("[%4d] downloaded %zu bytes from \e[3m%s\e[0m\n", task->id, length, task->url);
 
                 // Write the Buffer to the provided file descriptor. pwrite() is thread-safe
                 // and can write to a file with an offset. This task has downloaded the bytes
                 // for its byte range, therefore, its byte range is unique. The minimum of the
                 // byte range is the offset to start writing at which will not confict with other
                 // concurrent write requests to the file.
-                if ((pwrite(task->fd, data, length, task->min_range)) <= 0) {
-                    fprintf(stderr, "error writing: %s\n", task->url);
-                };
+                ssize_t written_bytes = pwrite(task->fd, data, length, task->min_range);
+                // TODO: RAISE a task flag to redo the task.
+                if (written_bytes == -1) {
+                    fprintf(stderr, "could not write bytes to file for: %s\n", task->url);
+                } else if (written_bytes != length) {
+                    fprintf(stderr, "only %zd of %zu bytes were written to file for: %s\n", written_bytes, length, task->url);
+                    // TODO: Possible retry write the bytes to disk again.
+                }
             } else {
                 fprintf(stderr, "error downloading: %s\n", task->url);
             }
@@ -148,6 +155,7 @@ Task *new_task(char *url, int min_range, int max_range, int fd, int id) {
     task->max_range = max_range;
     task->fd = fd;
     task->id = id;
+    task->flags = 0;
 
     strcpy(task->url, url);
 
@@ -227,7 +235,7 @@ int main(int argc, char **argv) {
     Context *context = spawn_workers(num_workers);
 
     // Foreach url within the file that contains a list of urls to download.
-    int x = 0;
+    int file_id = 0;
     while ((len = getline(&line, &len, fp)) != -1) {
         int bytes, num_tasks, fd;
 
@@ -237,7 +245,7 @@ int main(int argc, char **argv) {
 
         // Determine the number of downloads required to completely retrieve the
         // specified file. Validates the returned value.
-        if ((num_tasks = get_num_tasks(line, num_workers)) <= 1) {
+        if ((num_tasks = get_num_tasks(line, num_workers)) < 1) {
             // The number of required downloads could not be determined.
             continue;
         }
@@ -257,10 +265,12 @@ int main(int argc, char **argv) {
         // byte range. fcntl is used to duplicate the file descriptor so each task has
         // its own unique reference to the file.
         // F_DUPFD_CLOEXEC ensures once a task writes to the file descriptor it is automatically closed.
-        for (int i  = 0; i < num_tasks; i ++) {
-            queue_put(context->todo, new_task(line, i * bytes, (i+1) * bytes, fcntl(fd, F_DUPFD_CLOEXEC, 0), i + x ));
+        for (int chunk_id  = 0; chunk_id < num_tasks; chunk_id++) {
+            queue_put(context->todo, new_task(line, chunk_id * bytes,
+                (chunk_id+1) * bytes, fcntl(fd, F_DUPFD_CLOEXEC, 0), 
+                chunk_id + file_id ));
         }
-        x += 100;
+        file_id += 100;
 
         // Cleanup
         close(fd);

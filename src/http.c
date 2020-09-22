@@ -10,6 +10,11 @@
 #include "http.h"
 
 #define BUF_SIZE 1024
+// The maximum chunk size is 40MB.
+#define CHUNKING_MAX_BYTES 41943040
+// (dividend + (divisor - 1)) / divisor is a method to perform
+// round up integer divison.
+#define INT_DIVISION_RUP(n, d) ((n + (d - 1)) / d)
 
 int resolve_hostname(struct sockaddr_in *out, const char *host)
 {
@@ -275,14 +280,16 @@ int get_num_tasks(char *url, int threads)
     total_bytes = remote_content_length(response);
     if (server_accepts_ranges(response->data) && threads > 1)
     {
+        int chunk_size, additional_downloads = 0;
         // The server indicated it respects ranges so partial downloads
         // can occur.
-        // (dividend + (divisor - 1)) / divisor is a method to perform
-        // round up integer divison.
+        // Make sure the chunk size does not exceed the defined max.
+        do {
+            chunk_size = INT_DIVISION_RUP(total_bytes, threads + additional_downloads);
+        } while (++additional_downloads, chunk_size > CHUNKING_MAX_BYTES);
 
-        // TODO: set a cap on the chunk size
-        max_chunk_size = (total_bytes + (threads - 1)) / threads;
-        downloads = threads;
+        downloads = threads + additional_downloads;
+        max_chunk_size = chunk_size;
     }
     else
     {
