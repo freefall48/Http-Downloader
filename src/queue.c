@@ -112,6 +112,7 @@ void *queue_get(Queue *queue) {
     sem_wait(&queue->empty);
 
     action = queue->actions[queue->read_index];
+    queue->actions[queue->read_index] = NULL;
     queue->read_index = (queue->read_index + 1) % queue->size;
     
     sem_post(&queue->full);

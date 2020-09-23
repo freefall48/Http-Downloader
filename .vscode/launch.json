@@ -11,7 +11,7 @@
             "targetArchitecture": "x64",
             "program": "${workspaceRoot}/downloader",
             "args": [
-                "small.txt",
+                "0.1mb.txt",
                 "8",
                 "files"
             ],

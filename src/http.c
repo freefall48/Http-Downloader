@@ -25,7 +25,7 @@ int resolve_hostname(struct sockaddr_in *out, const char *host)
     // Attempt to resolve the hostname to an IPv4 address.
     if (getaddrinfo(host, NULL, &hints, &addr) != 0)
     {
-        perror("getaddrinfo");
+        perror("ERROR getaddrinfo");
         return -1;
     }
 
@@ -102,7 +102,6 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
     // Resolve the hostname to an IPv4 address
     if (resolve_hostname(&addr, host) != 0)
     {
-        perror("resolve_hostname");
         return NULL;
     }
 
@@ -111,7 +110,7 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
     // Attempt to connect to the server.
     if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
     {
-        perror("connect");
+        perror("ERROR connect");
         return NULL;
     }
 
@@ -120,10 +119,12 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
     // Read the response from the server into a Buffer.
     if (read_response(&data, &sockfd) != 0)
     {
-        perror("read_response");
+        perror("ERROR read_response");
+        close(sockfd);
         return NULL;
     }
 
+    close(sockfd);
     return data;
 }
 
@@ -286,7 +287,7 @@ int get_num_tasks(char *url, int threads)
     if (resolve_hostname(&addr, host) != 0)
     {
         // The hostname could not be resolved.
-        perror("resolve_hostname");
+        perror("ERROR resolve_hostname");
         return -1;
     }
 
@@ -297,7 +298,7 @@ int get_num_tasks(char *url, int threads)
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
     {
-        perror("connect");
+        perror("ERROR connect");
         return -1;
     }
 
@@ -308,9 +309,12 @@ int get_num_tasks(char *url, int threads)
     {
         // Server response couldn't be parsed into
         // a Buffer.
-        perror("read_response");
+        perror("ERROR read_response");
+        close(sockfd);
         return -1;
     }
+
+    close(sockfd);
 
     downloads = calc_chunking(response, threads);
 
