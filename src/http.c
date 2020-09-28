@@ -10,7 +10,7 @@
 #include "http.h"
 
 #define BUF_SIZE 1024
-// The maximum chunk size is 40MB.
+// The maximum chunk size in bytes (Default = 40MB)
 #define CHUNKING_MAX_BYTES 41943040
 
 int resolve_hostname(struct sockaddr_in *out, const char *host)
@@ -35,30 +35,41 @@ int resolve_hostname(struct sockaddr_in *out, const char *host)
     return 0;
 }
 
-int read_response(Buffer **dst,  int *sockfd)
+int read_response(Buffer **dst, int *sockfd)
 {
     size_t bytes_read, length = BUF_SIZE;
     char received[BUF_SIZE], *tmp;
 
+    // Initialise the Buffer that will hold the response data.
     (*dst) = malloc(sizeof(Buffer));
-
     (*dst)->data = calloc(BUF_SIZE, 1);
-
     (*dst)->length = 0;
 
+    // While bytes can be read from the socket, read at most BUF_SIZE and append
+    // them to the Buffer.
     while (bytes_read = read(*sockfd, received, BUF_SIZE), bytes_read > 0)
-    {   
-        if ((*dst)->length + bytes_read > length) {
+    {
+        // Check if the Buffer needs to be extended.
+        if ((*dst)->length + bytes_read > length)
+        {
+            // Double the length of the current buffer and reallocate.
             length *= 2;
             tmp = realloc((*dst)->data, length);
 
-            if (tmp) {
+            // Check realloc() did not return NULL. tmp prevents realloc() creating
+            // a memory leak if it returns a NULL pointer as access to the original
+            // memory is lost.
+            if (tmp)
+            {
                 (*dst)->data = tmp;
-            } else {
+            }
+            else
+            {
                 fprintf(stderr, "realloc() did not return a pointer! Likely out of memory.\n");
                 return -1;
             }
         }
+        // Append the new bytes and update the length of the Buffer.
         memcpy((*dst)->data + (*dst)->length, received, bytes_read);
         (*dst)->length += bytes_read;
     }
@@ -81,7 +92,7 @@ int read_response(Buffer **dst,  int *sockfd)
  */
 Buffer *http_query(char *host, char *page, const char *range, int port)
 {
-    Buffer *data;
+    Buffer *data = NULL;
     char request[BUF_SIZE];
     int sockfd;
 
@@ -89,7 +100,7 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
-    // Zero out the array then create the 
+    // Zero out the array then create the
     // required HTTP/1.0 GET Request packet.
     memset(request, '\0', BUF_SIZE);
     snprintf(request, BUF_SIZE,
@@ -120,8 +131,6 @@ Buffer *http_query(char *host, char *page, const char *range, int port)
     if (read_response(&data, &sockfd) != 0)
     {
         perror("ERROR read_response");
-        close(sockfd);
-        return NULL;
     }
 
     close(sockfd);
@@ -177,7 +186,7 @@ int server_accepts_ranges(const char *response)
 {
     char *start, *end, range[10];
 
-    // Determine if the server response contains the 
+    // Determine if the server response contains the
     // required field.
     start = strstr(response, "Accept-Ranges:");
     if (start)
@@ -209,9 +218,12 @@ size_t remote_content_length(Buffer *response)
 
     // Extract the content length from the server response.
     prefix = strstr(response->data, "Content-Length:");
-    if (prefix) {
+    if (prefix)
+    {
         sscanf(prefix, "Content-Length: %d\r\n", &content_length);
-    } else {
+    }
+    else
+    {
         // The server did not provide a content length.
         return 0;
     }
@@ -219,10 +231,12 @@ size_t remote_content_length(Buffer *response)
     return content_length;
 }
 
-int calc_chunking(Buffer *response, int threads) {
+int calc_chunking(Buffer *response, int threads)
+{
     size_t total_bytes;
-    
-    if ((total_bytes = remote_content_length(response)) == 0) {
+
+    if ((total_bytes = remote_content_length(response)) == 0)
+    {
         // Invalid content length to download.
         return 0;
     }
@@ -232,12 +246,14 @@ int calc_chunking(Buffer *response, int threads) {
         int chunk_size, additional_downloads = 0;
         // The server indicated it respects ranges so partial downloads
         // can occur.
-        do {
+        do
+        {
             // (dividend + (divisor - 1)) / divisor is a method to perform
             // round up integer divison.
             chunk_size = (total_bytes + (threads + additional_downloads - 1)) / threads + additional_downloads;
             // Make sure the chunk size does not exceed the defined max.
-            if (chunk_size > CHUNKING_MAX_BYTES) {
+            if (chunk_size > CHUNKING_MAX_BYTES)
+            {
                 // The current chunk size exceeds the maximum so there
                 // must be atleast 1 additional download required.
                 ++additional_downloads;
@@ -245,7 +261,7 @@ int calc_chunking(Buffer *response, int threads) {
         } while (chunk_size > CHUNKING_MAX_BYTES);
 
         max_chunk_size = chunk_size;
-        return threads + additional_downloads;     
+        return threads + additional_downloads;
     }
     // The server does not accept byte ranges. Therefore
     // only a single download may occur.
@@ -269,7 +285,8 @@ int get_num_tasks(char *url, int threads)
     int sockfd, downloads;
 
     // Try to split the url into 2 parts. Host and page.
-    if (split_url(url, &host, &page) < 0) {
+    if (split_url(url, &host, &page) < 0)
+    {
         // The url did not conform to host/page, so could
         // not be split.
         free(host);
@@ -335,7 +352,8 @@ Buffer *http_url(const char *url, const char *range)
 {
     char *host, *page;
 
-    if (split_url(url, &host, &page) < 0) {
+    if (split_url(url, &host, &page) < 0)
+    {
         free(host);
         return NULL;
     }

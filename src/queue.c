@@ -8,19 +8,27 @@
 #include <assert.h>
 
 #define handle_error_en(en, msg) \
-        do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
+    do                           \
+    {                            \
+        errno = en;              \
+        perror(msg);             \
+        exit(EXIT_FAILURE);      \
+    } while (0)
 
-#define handle_error(msg) \
-        do { perror(msg); exit(EXIT_FAILURE); } while (0)
-
-
+#define handle_error(msg)   \
+    do                      \
+    {                       \
+        perror(msg);        \
+        exit(EXIT_FAILURE); \
+    } while (0)
 
 /*
  * Queue - the abstract type of a concurrent queue.
  * You must provide an implementation of this type 
  * but it is hidden from the outside.
  */
-typedef struct QueueStruct {
+typedef struct QueueStruct
+{
     pthread_mutex_t write_lock;
     pthread_mutex_t read_lock;
     sem_t empty;
@@ -33,13 +41,13 @@ typedef struct QueueStruct {
     void **actions;
 } Queue;
 
-
 /**
  * Allocate a concurrent queue of a specific size
  * @param size - The size of memory to allocate to the queue
  * @return queue - Pointer to the allocated queue
  */
-Queue *queue_alloc(int size) {
+Queue *queue_alloc(int size)
+{
     Queue *queue = malloc(sizeof(Queue));
     queue->actions = malloc(sizeof(void *) * size);
 
@@ -56,7 +64,6 @@ Queue *queue_alloc(int size) {
     return queue;
 }
 
-
 /**
  * Free a concurrent queue and associated memory 
  *
@@ -66,11 +73,11 @@ Queue *queue_alloc(int size) {
  * 
  * @param queue - Pointer to the queue to free
  */
-void queue_free(Queue *queue) {
+void queue_free(Queue *queue)
+{
     free(queue->actions);
     free(queue);
 }
-
 
 /**
  * Place an item into the concurrent queue.
@@ -83,7 +90,8 @@ void queue_free(Queue *queue) {
  *               type. User's responsibility to manage memory and ensure
  *               it is correctly typed.
  */
-void queue_put(Queue *queue, void *item) {
+void queue_put(Queue *queue, void *item)
+{
     pthread_mutex_lock(&queue->write_lock);
     sem_wait(&queue->full);
 
@@ -105,7 +113,8 @@ void queue_put(Queue *queue, void *item) {
  * @return item - item retrieved from queue. void* type since it can be 
  *                arbitrary 
  */
-void *queue_get(Queue *queue) {
+void *queue_get(Queue *queue)
+{
     void *action;
 
     pthread_mutex_lock(&queue->read_lock);
@@ -114,10 +123,9 @@ void *queue_get(Queue *queue) {
     action = queue->actions[queue->read_index];
     queue->actions[queue->read_index] = NULL;
     queue->read_index = (queue->read_index + 1) % queue->size;
-    
+
     sem_post(&queue->full);
     pthread_mutex_unlock(&queue->read_lock);
 
     return action;
 }
-
